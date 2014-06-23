@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # -*- coding: utf-8 -*-
 
-require 'rainbow'
+require 'rainbow/ext/string'
 require 'optparse'
 
 AUGER_DIR = File.dirname(File.dirname(__FILE__))
@@ -15,7 +15,7 @@ require 'auger'
 ## set opts
 options = {}
 OptionParser.new do |opts|
-  opts.banner = "Usage: aug [-h|--help] [-l|--list] [-v|--version] cfg"
+  opts.banner = "Usage: aug [-h|--help] [-l|--list] [-v|--verbose] [-V|--version] cfg"
 
   if ARGV[0] == nil
     puts opts.banner.color(:yellow)
@@ -27,7 +27,7 @@ OptionParser.new do |opts|
     exit
   end
 
-  opts.on('-v', '--version', 'Display version and exit.') do
+  opts.on('-V', '--version', 'Display version and exit.') do
     puts Auger::VERSION
     exit
   end
@@ -43,41 +43,25 @@ OptionParser.new do |opts|
     options[:tunnel] = t
   end
 
+  opts.on('-v', '--verbose', 'Display error backtraces.') do
+    options[:verbose] = true
+  end
+
+  opts.on('-s', '--single-thread', 'Do not fork when running tests.') do
+    options[:single_thread] = true
+  end
+
 end.parse!
 
 ## load plugins
 Dir["#{File.dirname(File.dirname(__FILE__))}/lib/plugins/*.rb"].each { |file| require file }
 
-## pretty-print Result object
-module Auger
-  class Result
-
-    def format
-      output =
-        case self.outcome
-        when TrueClass  then "\u2713"
-        when MatchData  then outcome.captures.empty? ? "\u2713" : outcome.captures.join(' ')
-        when FalseClass then "\u2717"
-        when NilClass   then "nil"
-        when Exception  then "#{outcome.class}: #{outcome.to_s}"
-        else                 outcome.to_s
-        end
-
-      color =
-        case self.status
-        when FalseClass, NilClass then :red
-        when Exception            then :magenta
-        when Status               then
-          case self.status.value
-            when :ok        then :green
-            when :warn      then :yellow
-            when :exception then :magenta
-          else                   :red
-          end
-        else                           :green
-        end
-
-      return output.color(color)
+def runner(options)
+  if options[:single_thread]
+    yield
+  else
+    Process.fork do
+      yield
     end
   end
 end
@@ -98,8 +82,7 @@ Auger::Config.load(cfg).projects.each do |project|
     pipes = project.connections(*server.roles).map do |connection|
       read, write = IO.pipe
 
-      Process.fork do
-        read.close              # child does not need
+      runner(options) do
         conn = connection.try_open(server)
 
         responses = connection.requests.map do |request|
